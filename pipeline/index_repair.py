@@ -15,6 +15,30 @@ INDEX = "NIFTY 500"
 NSE_FILES_START = pd.Timestamp("2012-02-17")
 MAX_OVERLAP_DIFF_PCT = 0.1
 
+# Before NSE's 2015 rebranding, several indices had older names in the daily files.
+NAME_ALIASES = {
+    "CNX 500": "NIFTY 500", "S&P CNX 500": "NIFTY 500",
+    "CNX NIFTY": "NIFTY 50", "S&P CNX NIFTY": "NIFTY 50",
+}
+
+
+def normalise(frame: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Current index names and one date format, whatever year the file is from."""
+    if frame is None:
+        return None
+    frame = frame.copy()
+    frame["index_name"] = (frame["index_name"].astype(str).str.strip().str.upper()
+                           .replace(NAME_ALIASES))
+    frame["date"] = pd.to_datetime(frame["date"]).astype("datetime64[ns]")
+    return frame
+
+
+def names_like(frame: pd.DataFrame | None, text: str = "500") -> list[str]:
+    if frame is None or "index_name" not in frame:
+        return []
+    names = frame["index_name"].astype(str).unique()
+    return sorted(n for n in names if text in n)[:20]
+
 
 def load_history_csv(path: str) -> pd.DataFrame:
     raw = pd.read_csv(path)
@@ -34,10 +58,12 @@ def load_history_csv(path: str) -> pd.DataFrame:
 
 def overlap_check(stored: pd.DataFrame, history: pd.DataFrame) -> dict:
     """Compare closes on dates present in both sources."""
+    stored = normalise(stored)
     ours = stored[stored["index_name"] == INDEX][["date", "close"]]
     both = ours.merge(history[["date", "close"]], on="date", suffixes=("_nse", "_hist"))
     if both.empty:
-        return {"days": 0, "passed": False, "reason": "no overlapping dates"}
+        return {"days": 0, "passed": False, "reason": "no overlapping dates",
+                "index_names_with_500": names_like(stored)}
     diff_pct = ((both["close_nse"] - both["close_hist"]).abs() / both["close_hist"] * 100)
     return {"days": int(len(both)), "max_diff_pct": round(float(diff_pct.max()), 4),
             "mean_diff_pct": round(float(diff_pct.mean()), 5),
@@ -47,7 +73,7 @@ def overlap_check(stored: pd.DataFrame, history: pd.DataFrame) -> dict:
 def repair_year(indices: pd.DataFrame | None, trading_days: list[pd.Timestamp],
                 history: pd.DataFrame, fetch_day: Callable[[dt.date], pd.DataFrame | None],
                 last_close: float | None) -> tuple[pd.DataFrame, dict, float | None]:
-    frame = (indices.copy() if indices is not None and len(indices)
+    frame = (normalise(indices) if indices is not None and len(indices)
              else pd.DataFrame(columns=["date", "index_name", "open", "high", "low", "close"]))
     if "source" not in frame.columns:
         frame["source"] = "nse_daily"
@@ -72,6 +98,7 @@ def repair_year(indices: pd.DataFrame | None, trading_days: list[pd.Timestamp],
             last_close = float(row["close"])
             continue
         fetched = fetch_day(day.date()) if day >= NSE_FILES_START else None
+        fetched = normalise(fetched) if fetched is not None and len(fetched) else None
         if fetched is not None and (fetched["index_name"] == INDEX).any():
             fetched = fetched.assign(source="nse_daily", date=pd.Timestamp(day))
             added.append(fetched)
