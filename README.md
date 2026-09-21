@@ -37,3 +37,18 @@ Implements the data rules of *Multi-Layer Swing Strategy — Rulebook v1.0*.
 
 Prices are stored raw; `adjust.add_adjusted_prices()` is applied when data is loaded.
 History starts in 2008 so the indicators (200-DMA, 52-week range) are ready by 2010.
+
+## Step 4a: Backtest (price-based layers)
+
+| File | Purpose |
+| --- | --- |
+| `strategy/config.py` | Every rulebook number in one place |
+| `strategy/data.py` | Loads prices, NIFTY 500 and industry labels |
+| `strategy/features.py` | Universe, regime, trend template, relative strength, industry groups |
+| `strategy/vcp.py` | Base (VCP) detection and breakout signals |
+| `strategy/backtest.py` | Day-by-day portfolio simulation with costs and tax |
+| `strategy/report.py` | Metrics and the markdown report |
+| `scripts/run_backtest.py` | Runs A0, A1, A2 in-sample and out-of-sample |
+
+Run *Actions → "4 - Backtest (Step 4a)"*. The report appears on the run's summary page and is
+saved with the trade lists to `results/step4a/<timestamp>/` in the `market-data` bucket.
