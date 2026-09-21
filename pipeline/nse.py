@@ -30,6 +30,8 @@ HEADERS = {
 EQUITY_COLUMNS = ["date", "symbol", "series", "isin", "open", "high", "low",
                   "close", "prev_close", "volume", "value", "trades"]
 INDEX_COLUMNS = ["date", "index_name", "open", "high", "low", "close"]
+INDEX_ALIASES = {"CNX 500": "NIFTY 500", "S&P CNX 500": "NIFTY 500",
+                 "CNX NIFTY": "NIFTY 50", "S&P CNX NIFTY": "NIFTY 50"}
 
 
 class NotTradingDay(Exception):
@@ -174,7 +176,7 @@ def fetch_indices(day: dt.date, session: requests.Session) -> pd.DataFrame:
     raw.columns = [c.strip() for c in raw.columns]
     frame = pd.DataFrame({
         "date": pd.Timestamp(day),
-        "index_name": raw["Index Name"].str.strip().str.upper(),
+        "index_name": raw["Index Name"].str.strip().str.upper().replace(INDEX_ALIASES),
         "open": raw["Open Index Value"], "high": raw["High Index Value"],
         "low": raw["Low Index Value"], "close": raw["Closing Index Value"],
     })
