@@ -22,6 +22,7 @@ INDUSTRY_URLS = [
 ]
 LOCAL_INDUSTRY_CSV = "data/industry.csv"  # optional manual override: Symbol,Industry
 UNCLASSIFIED = "UNCLASSIFIED"
+LAST_EVENTS = {"events": None}   # corporate actions found by the last prepare_prices() call
 PRICE_COLUMNS = ["date", "symbol", "series", "open", "high", "low", "close",
                  "prev_close", "volume", "value"]
 
@@ -55,7 +56,12 @@ def prepare_prices(raw: pd.DataFrame) -> pd.DataFrame:
     raw = (raw.sort_values(["symbol", "date", "series_rank"])
            .drop_duplicates(["symbol", "date"]).drop(columns="series_rank"))
     frame = adjust.add_adjusted_prices(raw)
-    frame = frame.drop(columns=["open", "low", "volume", "adj_factor", "ca_event"])
+    flagged = frame["ca_event"] | frame["unexplained_gap"]
+    LAST_EVENTS["events"] = frame.loc[flagged, ["symbol", "date", "close", "prev_close", "ca_method",
+                                                "ca_factor", "unexplained_gap"]].astype(
+        {"symbol": str}).reset_index(drop=True)
+    frame = frame.drop(columns=["open", "low", "volume", "adj_factor", "ca_event", "ca_method",
+                                "ca_factor", "unexplained_gap"])
     for column in ["adj_open", "adj_high", "adj_low", "adj_close", "adj_volume", "value",
                    "high", "close", "prev_close"]:
         frame[column] = frame[column].astype("float64")

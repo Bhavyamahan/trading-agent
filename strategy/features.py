@@ -94,10 +94,10 @@ def add_layers(f: pd.DataFrame, nifty: pd.Series, industry: dict[str, str],
                p: Params) -> tuple[pd.DataFrame, pd.Series, dict]:
     f["in_universe"], universe_log = build_universe(f, p)
 
-    # Layer 2: tradable today
-    f["layer2"] = (f["in_universe"] & (f["series"] == "EQ") & (f["close"] >= p.min_price)
-                   & (f["adv_cr"] >= p.min_adv_crore) & (f["pos"] + 1 >= p.min_listing_sessions)
-                   & ~f["upper_circuit"])
+    # Layer 2 except the liquidity threshold, which differs by rulebook version
+    f["layer2_base"] = (f["in_universe"] & (f["series"] == "EQ") & (f["close"] >= p.min_price)
+                        & (f["pos"] + 1 >= p.min_listing_sessions) & ~f["upper_circuit"])
+    f["layer2"] = f["layer2_base"] & (f["adv_cr"] >= p.min_adv_crore)
 
     # Layer 4 inputs: RS percentile across today's universe
     ranked = f[f["in_universe"] & f["rs_raw"].notna()]

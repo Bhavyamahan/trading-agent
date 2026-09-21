@@ -87,7 +87,8 @@ def simulate(signals: pd.DataFrame, book: Book, calendar: pd.DatetimeIndex,
              regime: pd.Series, run: Run, p: Params) -> dict:
     cash = p.starting_capital
     positions: list[Position] = []
-    pending_entries: list[dict] = []
+    pending_entries: list[dict] = []     # v1.1: buy at next open
+    pending_orders: list[dict] = []      # v1.2: stop-limit buy orders for the next session
     trades, equity_rows, skips = [], [], {}
     by_day = {d: g for d, g in signals.groupby("date")} if len(signals) else {}
     fy_realised, loss_carry, taxes_paid = 0.0, 0.0, 0.0
@@ -138,6 +139,31 @@ def simulate(signals: pd.DataFrame, book: Book, calendar: pd.DatetimeIndex,
             loss_carry = taxable
         fy_realised = 0.0
 
+    def open_position(order, i, entry, day) -> bool:
+        nonlocal cash
+        sym = order["symbol"]
+        stop = order["final_low"] * (1 - p.stop_buffer)
+        if (entry - stop) / entry > p.stop_max:
+            skip("stop_too_wide")
+            return False
+        if (entry - stop) / entry < p.stop_min:
+            stop = entry * (1 - p.stop_min)
+        shares = math.floor(prev_equity * order["risk_pct"] / (entry - stop))
+        shares = min(shares, math.floor(p.max_position_pct * prev_equity / entry))
+        while shares > 0 and shares * entry + order_cost(shares * entry, "buy", p) > cash:
+            shares = math.floor(shares * 0.95) if shares > 20 else shares - 1
+        if shares < 1:
+            skip("not_enough_cash")
+            return False
+        value = shares * entry
+        outlay = value + order_cost(value, "buy", p)
+        cash -= outlay
+        positions.append(Position(sym, order["industry"], i, day, i, entry, stop, stop, shares,
+                                  shares, order["pivot"], order["rs_points"], order["rs_pct"],
+                                  order["risk_pct"], outlay,
+                                  last_close=book.data[sym]["adj_close"][i]))
+        return True
+
     prev_day = None
     for k, day in enumerate(calendar):
         d64 = np.datetime64(day, "ns")
@@ -167,27 +193,27 @@ def simulate(signals: pd.DataFrame, book: Book, calendar: pd.DatetimeIndex,
             if px["adj_open"][i] > p.chase_limit * order["pivot"]:
                 skip("gap_above_chase_limit")
                 continue
-            entry = px["adj_open"][i] * (1 + p.slippage)
-            stop = order["final_low"] * (1 - p.stop_buffer)
-            if (entry - stop) / entry > p.stop_max:
-                skip("stop_too_wide")
-                continue
-            if (entry - stop) / entry < p.stop_min:
-                stop = entry * (1 - p.stop_min)
-            shares = math.floor(prev_equity * order["risk_pct"] / (entry - stop))
-            shares = min(shares, math.floor(p.max_position_pct * prev_equity / entry))
-            while shares > 0 and shares * entry + order_cost(shares * entry, "buy", p) > cash:
-                shares = math.floor(shares * 0.95) if shares > 20 else shares - 1
-            if shares < 1:
-                skip("not_enough_cash")
-                continue
-            value = shares * entry
-            outlay = value + order_cost(value, "buy", p)
-            cash -= outlay
-            positions.append(Position(sym, order["industry"], i, day, i, entry, stop, stop, shares,
-                                      shares, order["pivot"], order["rs_points"], order["rs_pct"],
-                                      order["risk_pct"], outlay, last_close=px["adj_close"][i]))
+            open_position(order, i, px["adj_open"][i] * (1 + p.slippage), day)
         pending_entries = []
+
+        fills = 0
+        for order in pending_orders:
+            sym = order["symbol"]
+            i = book.index_on(sym, d64)
+            if i is None:
+                continue
+            px = book.data[sym]
+            o, h, l = px["adj_open"][i], px["adj_high"][i], px["adj_low"][i]
+            trigger, limit = order["pivot"], p.buy_stop_limit * order["pivot"]
+            if h < trigger or l > limit:
+                continue                                  # never traded inside the order band
+            if fills >= p.max_new_per_day:
+                skip("max_new_per_day")
+                continue
+            price = limit if o > limit else max(o, trigger)
+            if open_position(order, i, min(price * (1 + p.slippage), limit), day):
+                fills += 1
+        pending_orders = []
 
         # 2. During the day: stop-loss first (conservative), then partial target
         for pos in positions:
@@ -286,10 +312,11 @@ def simulate(signals: pd.DataFrame, book: Book, calendar: pd.DatetimeIndex,
         for q in live:
             by_industry[q.industry] = by_industry.get(q.industry, 0) + 1
         for _, sig in ranked.iterrows():
-            if len(pending_entries) >= p.max_new_per_day:
+            queue = pending_orders if p.entry_mode == "buy_stop" else pending_entries
+            if p.entry_mode != "buy_stop" and len(queue) >= p.max_new_per_day:
                 skip("max_new_per_day")
                 continue
-            if len(live) + len(pending_entries) >= p.max_positions:
+            if len(live) + len(queue) >= p.max_positions:
                 skip("max_positions")
                 continue
             if sig["symbol"] in held_syms:
@@ -318,9 +345,9 @@ def simulate(signals: pd.DataFrame, book: Book, calendar: pd.DatetimeIndex,
             heat += risk * equity
             by_industry[ind] = by_industry.get(ind, 0) + 1
             held_syms.add(sig["symbol"])
-            pending_entries.append({"symbol": sig["symbol"], "industry": ind, "pivot": sig["pivot"],
-                                    "final_low": sig["final_low"], "rs_points": int(sig["rs_points"]),
-                                    "rs_pct": float(sig["rs_pct"]), "risk_pct": risk})
+            queue.append({"symbol": sig["symbol"], "industry": ind, "pivot": sig["pivot"],
+                          "final_low": sig["final_low"], "rs_points": int(sig["rs_points"]),
+                          "rs_pct": float(sig["rs_pct"]), "risk_pct": risk})
 
     # End of test: close everything at the last close, then settle tax
     last = calendar[-1]

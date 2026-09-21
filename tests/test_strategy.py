@@ -114,6 +114,70 @@ def test_exit_path():
     assert t["shares"] == 2000  # 1% of 10 lakh / R of 5
 
 
+def test_zigzag_setup():
+    from dataclasses import replace
+    high, low, close = vcp_path()
+    s = len(close) - 5                      # the last day of the tight range, before the breakout
+    zz = replace(P, swing_method="zigzag")
+    setup = vcp.find_setup(high, low, 60.0, 100.0, s, zz)
+    assert setup is not None, "zigzag should see the contracting base"
+    assert all(b <= 0.7 * a for a, b in zip(setup.contractions, setup.contractions[1:]))
+    # A wiggle inside the first pullback (+1.5%) must not create an extra contraction.
+    h2, l2 = high.copy(), low.copy()
+    j = 42
+    h2[j] *= 1.015
+    assert vcp.find_setup(h2, l2, 60.0, 100.0, s, zz) is not None
+    # After the breakout above the last swing high there is no pre-breakout setup.
+    assert vcp.find_setup(high, low, 60.0, 100.0, len(close) - 1, zz) is None
+
+
+def test_buy_stop_fills():
+    from dataclasses import replace
+    dates = pd.bdate_range("2016-01-01", periods=6)
+    def run(o, h, l):
+        f = pd.DataFrame({"date": dates, "symbol": "Y", "adj_open": o, "adj_high": h, "adj_low": l,
+                          "adj_close": [x * 0.999 for x in h], "adj_volume": 1e5, "dma10": 50.0,
+                          "dma20": 50.0, "dma50": 50.0, "avgvol50": 1e5, "close_prev15": np.nan})
+        order = pd.DataFrame([{"date": dates[0], "symbol": "Y", "pivot": 100.0, "final_low": 95.0,
+                               "rs_points": 3, "rs_pct": 90.0, "industry": "I"}])
+        zp = replace(P, entry_mode="buy_stop", slippage=0.0)
+        res = simulate(order, Book(f, ["Y"]), pd.DatetimeIndex(dates), pd.Series("ON", index=dates),
+                       Run("A0", False, False, ""), zp)
+        return res["trades"]
+    # Opens below the pivot, trades through it: filled exactly at the pivot.
+    t = run([99, 99, 100, 101, 102, 103], [99.5, 101, 102, 103, 104, 105], [98, 98.5, 99.5, 100.5, 101, 102])
+    assert len(t) == 1 and abs(t.iloc[0]["entry"] - 100.0) < 1e-9
+    # Gaps to 103 (above the 102 limit) and never trades back to 102: not filled.
+    t = run([99, 103, 104, 105, 106, 107], [99.5, 104, 105, 106, 107, 108], [98, 102.5, 103, 104, 105, 106])
+    assert len(t) == 0
+    # Gaps to 103 but dips to 101.5 later that day: filled at the 102 limit.
+    t = run([99, 103, 103, 104, 105, 106], [99.5, 104, 104, 105, 106, 107], [98, 101.5, 102.5, 103, 104, 105])
+    assert len(t) == 1 and abs(t.iloc[0]["entry"] - 102.0) < 1e-9
+
+
+def test_v12_pipeline_accounting():
+    from dataclasses import replace
+    from strategy.config import V12
+    from strategy.data import prepare_prices
+    raw, nifty = synthetic_market(seed=5)
+    f = features.add_stock_indicators(prepare_prices(raw), nifty)
+    f, regime, _ = features.add_layers(f, nifty, {}, V12)
+    loose = replace(V12, contraction_ratio=1.5, final_contraction_max=0.25, dryup_ratio=5.0,
+                    upper_base=0.5, base_depth_min=0.0)
+    orders = vcp.all_signals(f, loose)
+    assert len(orders) > 20
+    cal = nifty.index[(nifty.index >= "2010-01-01") & (nifty.index <= "2019-12-31")]
+    res = simulate(orders[orders["date"].between(cal[0], cal[-1])], Book(f, orders["symbol"].unique()),
+                   cal, regime, Run("A1", True, False, ""), loose)
+    t, eq = res["trades"], res["equity"]
+    assert len(t) > 0
+    assert abs(eq["equity"].iloc[-1] - (P.starting_capital + t["net_pnl"].sum() - res["taxes_paid"])) < 1.0
+    assert (t.groupby("entry_date").size() <= P.max_new_per_day).all()
+    assert (t["entry"] >= 0).all()
+    print("v1.2 synthetic:", len(t), "trades,", t["exit_reason"].value_counts().to_dict())
+
+
 if __name__ == "__main__":
     test_find_setup(); test_costs(); test_pipeline_and_simulation(); test_exit_path()
+    test_zigzag_setup(); test_buy_stop_fills(); test_v12_pipeline_accounting()
     print("All strategy tests passed")

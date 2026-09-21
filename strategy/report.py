@@ -70,44 +70,78 @@ def _fmt(value):
     return f"{value:,}" if isinstance(value, int) else str(value)
 
 
-def markdown_report(summary: dict, diagnostics: dict, yearly: dict, skips: dict,
-                    exit_mix: dict) -> str:
-    lines = ["# Backtest report: Rulebook v1.1, Step 4a (price-based layers)", ""]
-    lines += ["## Results by run and period", "",
-              "| Run | Period | " + " | ".join(label for _, label in COLUMNS) + " |",
-              "|" + " --- |" * (len(COLUMNS) + 2)]
-    for (run, period), m in summary.items():
-        lines.append(f"| {run} | {period} | " + " | ".join(_fmt(m.get(k, "n/a")) for k, _ in COLUMNS) + " |")
+def markdown_report(results: dict, diagnostics: dict, events: pd.DataFrame) -> str:
+    lines = ["# Backtest report: Rulebook v1.1 (corrected data) vs v1.2", "",
+             "v1.1 = original rules, now on split/bonus-corrected prices. "
+             "v1.2 = corrected data + buy-stop entry at the pivot, liquidity sized to our "
+             "positions, and swings counted only after a 3% reversal.", ""]
+    lines += ["## Results by version, run and period", "",
+              "| Version | Run | Period | " + " | ".join(label for _, label in COLUMNS) + " |",
+              "|" + " --- |" * (len(COLUMNS) + 3)]
+    for res in results.values():
+        for (version, run, period), m in res["summary"].items():
+            lines.append(f"| {version} | {run} | {period} | "
+                         + " | ".join(_fmt(m.get(k, "n/a")) for k, _ in COLUMNS) + " |")
     lines += ["", "R = profit or loss divided by the rupee risk taken at entry. "
               "Nifty 500 CAGR is the price index (excludes dividends, about 1 to 1.5% a year).", ""]
 
-    lines += ["## Acceptance check (partial: fundamental layers not yet included)", "",
-              "| Run | Criterion | Threshold | Out-of-sample value | Pass |", "| --- | --- | --- | --- | --- |"]
-    for (run, period), m in summary.items():
-        if period != "out_of_sample":
-            continue
+    lines += ["## Acceptance check, v1.2 (partial: fundamental layers not yet included)", "",
+              "Judge mainly on in-sample: the out-of-sample period has now been seen once.", "",
+              "| Run | Period | Criterion | Threshold | Value | Pass |",
+              "| --- | --- | --- | --- | --- | --- |"]
+    for (version, run, period), m in results.get("v1.2", {"summary": {}})["summary"].items():
         for key, op, limit, label in CRITERIA:
+            limit_used = 100 if (key == "trades" and period == "in_sample") else limit
             value = m.get(key, float("nan"))
-            ok = (value >= limit) if op == ">=" else (value <= limit)
-            lines.append(f"| {run} | {label} | {op} {limit} | {_fmt(value)} | {'yes' if ok else 'no'} |")
-        beat = m.get("cagr_after_tax_pct", float("nan")) >= m.get("nifty500_pr_cagr_pct", float("nan")) + 3
-        lines.append(f"| {run} | After-tax CAGR vs Nifty 500 + 3 pts | "
-                     f"{_fmt(m.get('nifty500_pr_cagr_pct', float('nan')) + 3)} | "
-                     f"{_fmt(m.get('cagr_after_tax_pct', float('nan')))} | {'yes' if beat else 'no'} |")
+            ok = (value >= limit_used) if op == ">=" else (value <= limit_used)
+            lines.append(f"| {run} | {period} | {label.replace(' (out-of-sample)', '')} | "
+                         f"{op} {limit_used} | {_fmt(value)} | {'yes' if ok else 'no'} |")
     lines.append("")
 
-    for run, table in yearly.items():
-        lines += [f"## Year-by-year returns, {run} (pre-tax)", "", "| Year | Strategy % | Nifty 500 % |",
+    lines += ["## Layer funnel (stock-days since 2010)", "", "| Version | Step | Count |", "| --- | --- | --- |"]
+    for name, res in results.items():
+        lines += [f"| {name} | {k} | {v:,} |" for k, v in res["funnel"].items()]
+    lines.append("")
+
+    for key, table in results.get("v1.2", {"yearly": {}})["yearly"].items():
+        lines += [f"## Year-by-year returns, {key} (pre-tax)", "", "| Year | Strategy % | Nifty 500 % |",
                   "| --- | --- | --- |"]
         lines += [f"| {y} | {_fmt(r.strategy_pct)} | {_fmt(r.nifty500_pct)} |" for y, r in table.iterrows()]
         lines.append("")
 
-    lines += ["## How trades ended (all periods)", "", "| Run | Exit reason | Trades |", "| --- | --- | --- |"]
-    for run, mix in exit_mix.items():
-        lines += [f"| {run} | {reason} | {count} |" for reason, count in mix.items()]
-    lines += ["", "## Signals not taken (all periods)", "", "| Run | Reason | Count |", "| --- | --- | --- |"]
-    for run, reasons in skips.items():
-        lines += [f"| {run} | {reason} | {count} |" for reason, count in sorted(reasons.items())]
+    lines += ["## How trades ended (all periods)", "", "| Version and run | Exit reason | Trades |",
+              "| --- | --- | --- |"]
+    for res in results.values():
+        for key, mix in res["exits"].items():
+            lines += [f"| {key} | {reason} | {count} |" for reason, count in mix.items()]
+    lines += ["", "## Signals or orders not taken (all periods)", "", "| Version and run | Reason | Count |",
+              "| --- | --- | --- |"]
+    for res in results.values():
+        for key, reasons in res["skips"].items():
+            lines += [f"| {key} | {reason} | {count} |" for reason, count in sorted(reasons.items())]
+
+    lines += ["", "## Corporate-action audit (stocks that were ever in the universe)", ""]
+    if events is not None and len(events):
+        ev = events.copy()
+        ev["year"] = pd.to_datetime(ev["date"]).dt.year
+        ev["kind"] = np.where(ev["unexplained_gap"], "unexplained_gap", ev["ca_method"])
+        counts = ev.pivot_table(index="year", columns="kind", values="symbol", aggfunc="count", fill_value=0)
+        lines += ["| Year | " + " | ".join(counts.columns) + " |", "|" + " --- |" * (len(counts.columns) + 1)]
+        lines += [f"| {y} | " + " | ".join(str(int(v)) for v in row) + " |" for y, row in counts.iterrows()]
+        lines += ["", "prev_close = found by NSE's adjusted previous close. gap_ratio = found by the new "
+                  "overnight-gap check (the fix). unexplained_gap = a move beyond -40%/+80% matching no "
+                  "split ratio, left unadjusted.", "", "Gap-ratio events (spot-check these against known "
+                  "splits and bonuses):", "", "| Symbol | Date | Factor |", "| --- | --- | --- |"]
+        gap = ev[ev["kind"] == "gap_ratio"].sort_values("date", ascending=False).head(40)
+        lines += [f"| {r.symbol} | {pd.Timestamp(r.date).date()} | {r.ca_factor:.4g} |" for r in gap.itertuples()]
+        odd = ev[ev["kind"] == "unexplained_gap"].sort_values("date", ascending=False).head(20)
+        if len(odd):
+            lines += ["", "Unexplained large moves (left as real price moves):", "",
+                      "| Symbol | Date | Close | Previous close |", "| --- | --- | --- | --- |"]
+            lines += [f"| {r.symbol} | {pd.Timestamp(r.date).date()} | {r.close:g} | {r.prev_close:g} |"
+                      for r in odd.itertuples()]
+    else:
+        lines.append("No corporate actions detected.")
 
     lines += ["", "## Data checks", ""]
     for key, value in diagnostics.items():

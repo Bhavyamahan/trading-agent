@@ -3,7 +3,7 @@
 Change a value here only through a rulebook version bump. The plateau test
 (later) varies these by +/-20%.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,10 @@ class Params:
     rs_line_near_high: float = 0.95
     industry_min_members: int = 3
     # Layer 7: setup and trigger
+    swing_method: str = "bars"          # v1.1 "bars" (3-bar swings) | v1.2 "zigzag"
+    zigzag_pct: float = 0.03            # v1.2: a swing needs a 3% reversal
+    entry_mode: str = "next_open"       # v1.1 "next_open" | v1.2 "buy_stop"
+    buy_stop_limit: float = 1.02        # v1.2: stop-limit order never fills above 1.02 x pivot
     base_max_len: int = 65
     base_min_len: int = 15
     base_depth_min: float = 0.08
@@ -95,6 +99,17 @@ RUNS = [
     Run("A1", True, False, "A0 + Layer 1 market regime"),
     Run("A2", True, True, "A1 + Layer 4 relative-strength score sizing"),
 ]
+
+# Rulebook versions compared in the report. v1.1 = original rules on corrected data.
+V11 = Params()
+V12 = replace(
+    V11,
+    # Liquidity: daily value traded >= 100 x the largest position (20% of capital), floor Rs 2 cr
+    min_adv_crore=max(2.0, 100 * V11.max_position_pct * V11.starting_capital / 1e7),
+    swing_method="zigzag",
+    entry_mode="buy_stop",
+)
+VERSIONS = {"v1.1": V11, "v1.2": V12}
 
 PERIODS = {
     "in_sample": ("2010-01-01", "2019-12-31"),
