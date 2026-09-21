@@ -1,0 +1,39 @@
+name: 2 - Backfill history
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: "First year to download"
+        default: "2008"
+        required: true
+      end_year:
+        description: "Last year to download"
+        default: "2026"
+        required: true
+      force:
+        description: "Re-download years that are already stored"
+        type: boolean
+        default: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Download and store history
+        run: |
+          python scripts/backfill.py \
+            --start-year "${{ inputs.start_year }}" \
+            --end-year "${{ inputs.end_year }}" \
+            ${{ inputs.force && '--force' || '' }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
