@@ -97,31 +97,49 @@ def _to_numbers(frame: pd.DataFrame, columns) -> pd.DataFrame:
     return frame
 
 
+def _optional(raw: pd.DataFrame, column: str) -> pd.Series:
+    """Older files lack some columns (ISIN and trade count before ~2011)."""
+    if column in raw.columns:
+        return raw[column].str.strip()
+    return pd.Series(pd.NA, index=raw.index, dtype="object")
+
+
+def _required(raw: pd.DataFrame, columns: list[str], day: dt.date) -> None:
+    missing = [c for c in columns if c not in raw.columns]
+    if missing:
+        raise ValueError(f"{day}: bhavcopy is missing columns {missing}; "
+                         f"columns found: {list(raw.columns)}")
+
+
 def parse_legacy(raw: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+    _required(raw, ["SYMBOL", "SERIES", "OPEN", "HIGH", "LOW", "CLOSE",
+                    "PREVCLOSE", "TOTTRDQTY", "TOTTRDVAL"], day)
     frame = pd.DataFrame({
         "date": pd.Timestamp(day),
         "symbol": raw["SYMBOL"].str.strip(),
         "series": raw["SERIES"].str.strip(),
-        "isin": raw["ISIN"].str.strip(),
+        "isin": _optional(raw, "ISIN"),
         "open": raw["OPEN"], "high": raw["HIGH"], "low": raw["LOW"],
         "close": raw["CLOSE"], "prev_close": raw["PREVCLOSE"],
         "volume": raw["TOTTRDQTY"], "value": raw["TOTTRDVAL"],
-        "trades": raw["TOTALTRADES"],
+        "trades": _optional(raw, "TOTALTRADES"),
     })
     return _finish(frame)
 
 
 def parse_udiff(raw: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+    _required(raw, ["FinInstrmTp", "TckrSymb", "SctySrs", "OpnPric", "HghPric",
+                    "LwPric", "ClsPric", "PrvsClsgPric", "TtlTradgVol", "TtlTrfVal"], day)
     raw = raw[raw["FinInstrmTp"].str.strip() == "STK"]
     frame = pd.DataFrame({
         "date": pd.Timestamp(day),
         "symbol": raw["TckrSymb"].str.strip(),
         "series": raw["SctySrs"].str.strip(),
-        "isin": raw["ISIN"].str.strip(),
+        "isin": _optional(raw, "ISIN"),
         "open": raw["OpnPric"], "high": raw["HghPric"], "low": raw["LwPric"],
         "close": raw["ClsPric"], "prev_close": raw["PrvsClsgPric"],
         "volume": raw["TtlTradgVol"], "value": raw["TtlTrfVal"],
-        "trades": raw["TtlNbOfTxsExctd"],
+        "trades": _optional(raw, "TtlNbOfTxsExctd"),
     })
     return _finish(frame)
 
