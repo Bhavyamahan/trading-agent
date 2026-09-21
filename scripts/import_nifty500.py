@@ -18,8 +18,10 @@ def main() -> None:
     history = index_repair.load_history_csv(HISTORY_CSV)
 
     stored_2012 = storage.load_parquet("indices/2012.parquet")
-    check = index_repair.overlap_check(
-        stored_2012.assign(date=pd.to_datetime(stored_2012["date"])), history)
+    if stored_2012 is None:
+        print("STOPPED: indices/2012.parquet not found in Supabase Storage.")
+        sys.exit(1)
+    check = index_repair.overlap_check(stored_2012, history)
     print(f"Overlap check 2012: {check}")
     if not check["passed"]:
         storage.log_run("import_nifty500", "failed", {"overlap": check})
