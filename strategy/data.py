@@ -74,6 +74,24 @@ def prepare_prices(raw: pd.DataFrame, official: pd.DataFrame | None = None) -> p
     return frame.reset_index(drop=True)
 
 
+def load_index(name: str, years: list[int] | None = None) -> pd.Series | None:
+    """Close series for any NSE index stored in indices/<year>.parquet (None if absent)."""
+    if years is None:
+        years = sorted(int(n.split(".")[0]) for n in storage.list_files("indices"))
+    frames = []
+    for year in years:
+        frame = storage.load_parquet(f"indices/{year}.parquet")
+        if frame is not None:
+            frame = frame[frame["index_name"].astype(str).str.upper() == name.upper()]
+            if len(frame):
+                frames.append(frame[["date", "close"]])
+    if not frames:
+        return None
+    series = pd.concat(frames)
+    series["date"] = pd.to_datetime(series["date"]).astype("datetime64[ns]")
+    return series.drop_duplicates("date").set_index("date")["close"].sort_index().astype(float)
+
+
 def load_nifty(years: list[int] | None = None) -> pd.Series:
     if years is None:
         years = sorted(int(n.split(".")[0]) for n in storage.list_files("indices"))
