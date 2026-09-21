@@ -80,7 +80,9 @@ def main() -> None:
     diagnostics["regime_days_since_2010"] = regime[regime.index >= "2010-01-01"].value_counts().to_dict()
 
     results = {name: run_version(name, vp, f, regime, nifty) for name, vp in VERSIONS.items()}
-    text = report.markdown_report(results, diagnostics, events)
+    audit = pd.DataFrame(data.LAST_EVENTS["official_audit"])
+    diagnostics["official_corporate_action_sources"] = "; ".join(data.LAST_EVENTS["official_sources"]) or "none"
+    text = report.markdown_report(results, diagnostics, events, audit)
     summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_file:
         with open(summary_file, "a", encoding="utf-8") as handle:
@@ -96,6 +98,7 @@ def main() -> None:
         storage.upload_bytes(f"{folder}/signals_{name}.csv",
                              res["signals"].to_csv(index=False).encode(), "text/csv")
     storage.upload_bytes(f"{folder}/corporate_actions.csv", events.to_csv(index=False).encode(), "text/csv")
+    storage.upload_bytes(f"{folder}/official_actions_audit.csv", audit.to_csv(index=False).encode(), "text/csv")
     storage.upload_bytes(f"{folder}/universe_log.csv",
                          diagnostics["universe_log"].to_csv(index=False).encode(), "text/csv")
     storage.log_run("backtest", "ok", {"folder": folder, "results": {

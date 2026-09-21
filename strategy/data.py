@@ -10,7 +10,7 @@ import os
 import pandas as pd
 import requests
 
-from pipeline import adjust, nse, storage
+from pipeline import adjust, corporate_actions, nse, storage
 
 INDUSTRY_URLS = [
     "https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv",
@@ -22,7 +22,7 @@ INDUSTRY_URLS = [
 ]
 LOCAL_INDUSTRY_CSV = "data/industry.csv"  # optional manual override: Symbol,Industry
 UNCLASSIFIED = "UNCLASSIFIED"
-LAST_EVENTS = {"events": None}   # corporate actions found by the last prepare_prices() call
+LAST_EVENTS = {"events": None, "official_audit": [], "official_sources": []}
 PRICE_COLUMNS = ["date", "symbol", "series", "open", "high", "low", "close",
                  "prev_close", "volume", "value"]
 
@@ -45,17 +45,21 @@ def load_prices(years: list[int] | None = None) -> pd.DataFrame:
         union = sorted(set().union(*[set(fr[column].cat.categories) for fr in frames]))
         for fr in frames:
             fr[column] = fr[column].cat.set_categories(union)
-    return prepare_prices(pd.concat(frames, ignore_index=True))
+    official, sources = corporate_actions.load_official_events()
+    LAST_EVENTS["official_sources"] = sources
+    print(f"  official corporate actions: {len(official):,} events from {sources}", flush=True)
+    return prepare_prices(pd.concat(frames, ignore_index=True), official)
 
 
-def prepare_prices(raw: pd.DataFrame) -> pd.DataFrame:
+def prepare_prices(raw: pd.DataFrame, official: pd.DataFrame | None = None) -> pd.DataFrame:
     raw = raw.copy()
     raw["date"] = pd.to_datetime(raw["date"]).astype("datetime64[ns]")
     # A symbol can appear twice on one day only through data errors; keep EQ first.
     raw["series_rank"] = raw["series"].astype(str).map({"EQ": 0, "BE": 1, "BZ": 2}).fillna(3)
     raw = (raw.sort_values(["symbol", "date", "series_rank"])
            .drop_duplicates(["symbol", "date"]).drop(columns="series_rank"))
-    frame = adjust.add_adjusted_prices(raw)
+    frame = adjust.add_adjusted_prices(raw, official)
+    LAST_EVENTS["official_audit"] = frame.attrs.get("official_audit", [])
     flagged = frame["ca_event"] | frame["unexplained_gap"]
     LAST_EVENTS["events"] = frame.loc[flagged, ["symbol", "date", "close", "prev_close", "ca_method",
                                                 "ca_factor", "unexplained_gap"]].astype(

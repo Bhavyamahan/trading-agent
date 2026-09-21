@@ -104,6 +104,46 @@ def test_index_repair():
     assert not none["passed"] and none["index_names_with_500"] == ["SOMETHING 500"]
 
 
+
+
+
+def test_official_corporate_actions():
+    from pipeline.corporate_actions import events_from_table
+    d = pd.bdate_range("2024-03-01", periods=8)
+    def stock(sym, closes, opens=None):
+        opens = opens or closes
+        prev = [closes[0]] + closes[:-1]          # unadjusted previous close, like NSE files
+        return pd.DataFrame({"symbol": sym, "date": d, "open": opens, "high": [max(a, b) for a, b in zip(opens, closes)],
+                             "low": [min(a, b) for a, b in zip(opens, closes)], "close": closes,
+                             "prev_close": prev, "volume": 100.0})
+    raw = pd.concat([
+        stock("BON", [300, 303, 306, 204, 206, 208, 210, 212]),        # 1:2 bonus on day 4 (-33%)
+        stock("LATE", [100, 101, 102, 103, 51, 52, 53, 54]),           # split listed a day early
+        stock("NONE", [50, 51, 52, 53, 54, 55, 56, 57]),               # listed bonus, no price gap
+        stock("DEM", [200, 202, 204, 140, 142, 144, 146, 148],
+              [200, 202, 204, 141, 142, 144, 146, 148]),               # demerger, open -31%
+        stock("CRASH", [100, 99, 98, 78.4, 77, 76, 75, 74]),           # -20% circuit, no event
+    ], ignore_index=True)
+    listed = pd.DataFrame({
+        "SYMBOL": ["BON", "LATE", "NONE", "DEM", "BON"],
+        "PURPOSE": ["Bonus 1:2", "Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 5/- Per Share",
+                    "Bonus 1:1", "Demerger", "Interim Dividend - Rs 2 Per Share"],
+        "EX-DATE": [d[3].strftime("%d-%b-%Y"), d[3].strftime("%d-%b-%Y"), d[3].strftime("%d-%b-%Y"),
+                    d[3].strftime("%d-%b-%Y"), d[5].strftime("%d-%b-%Y")]})
+    events = events_from_table(listed)
+    assert len(events) == 4, "the dividend must be ignored"
+    out = adjust.add_adjusted_prices(raw, events).set_index(["symbol", "date"])
+    bon = out.loc["BON"]["adj_close"].round(2).tolist()
+    assert bon[:3] == [200.0, 202.0, 204.0] and bon[3] == 204.0          # no fake -33% crash
+    late = out.loc["LATE"]
+    assert late["ca_method"].iloc[4] == "official" and late["adj_close"].iloc[3] == 51.5  # matched one day later
+    assert out.loc["NONE"]["adj_factor"].eq(1.0).all()                   # no gap -> not applied
+    dem = out.loc["DEM"]
+    assert dem["ca_method"].iloc[3] == "official" and abs(dem["adj_close"].iloc[2] - 204 * 141 / 204) < 1e-6
+    assert out.loc["CRASH"]["adj_factor"].eq(1.0).all()                  # a real crash stays a crash
+    statuses = {a["symbol"]: a["status"] for a in out.attrs.get("official_audit", [])} if hasattr(out, "attrs") else {}
+
+
 if __name__ == "__main__":
-    test_legacy_parse(); test_legacy_2008_without_isin(); test_udiff_parse(); test_split_adjustment(); test_index_repair()
+    test_legacy_parse(); test_legacy_2008_without_isin(); test_udiff_parse(); test_split_adjustment(); test_index_repair(); test_official_corporate_actions()
     print("All offline tests passed")

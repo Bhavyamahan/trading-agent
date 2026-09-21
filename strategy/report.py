@@ -70,7 +70,8 @@ def _fmt(value):
     return f"{value:,}" if isinstance(value, int) else str(value)
 
 
-def markdown_report(results: dict, diagnostics: dict, events: pd.DataFrame) -> str:
+def markdown_report(results: dict, diagnostics: dict, events: pd.DataFrame,
+                    audit: pd.DataFrame | None = None) -> str:
     lines = ["# Backtest report: Rulebook v1.1 (corrected data) vs v1.2", "",
              "v1.1 = original rules, now on split/bonus-corrected prices. "
              "v1.2 = corrected data + buy-stop entry at the pivot, liquidity sized to our "
@@ -120,6 +121,18 @@ def markdown_report(results: dict, diagnostics: dict, events: pd.DataFrame) -> s
         for key, reasons in res["skips"].items():
             lines += [f"| {key} | {reason} | {count} |" for reason, count in sorted(reasons.items())]
 
+    lines += ["", "## Official corporate actions (NSE list)", ""]
+    if audit is not None and len(audit):
+        table = audit.groupby(["kind", "status"]).size().unstack(fill_value=0)
+        lines += ["| Kind | " + " | ".join(table.columns) + " |", "|" + " --- |" * (len(table.columns) + 1)]
+        lines += [f"| {k} | " + " | ".join(str(int(v)) for v in row) + " |" for k, row in table.iterrows()]
+        missing = audit[audit["status"] != "applied"].sort_values("ex_date", ascending=False).head(15)
+        if len(missing):
+            lines += ["", "Listed events not applied (no matching price move within 3 sessions):", "",
+                      "| Symbol | Ex-date | Kind | Status |", "| --- | --- | --- | --- |"]
+            lines += [f"| {r.symbol} | {r.ex_date} | {r.kind} | {r.status} |" for r in missing.itertuples()]
+    else:
+        lines.append("No official list loaded: run workflow '5 - Fetch corporate actions' first.")
     lines += ["", "## Corporate-action audit (stocks that were ever in the universe)", ""]
     if events is not None and len(events):
         ev = events.copy()
@@ -128,10 +141,10 @@ def markdown_report(results: dict, diagnostics: dict, events: pd.DataFrame) -> s
         counts = ev.pivot_table(index="year", columns="kind", values="symbol", aggfunc="count", fill_value=0)
         lines += ["| Year | " + " | ".join(counts.columns) + " |", "|" + " --- |" * (len(counts.columns) + 1)]
         lines += [f"| {y} | " + " | ".join(str(int(v)) for v in row) + " |" for y, row in counts.iterrows()]
-        lines += ["", "prev_close = found by NSE's adjusted previous close. gap_ratio = found by the new "
-                  "overnight-gap check (the fix). unexplained_gap = a move beyond -40%/+80% matching no "
-                  "split ratio, left unadjusted.", "", "Gap-ratio events (spot-check these against known "
-                  "splits and bonuses):", "", "| Symbol | Date | Factor |", "| --- | --- | --- |"]
+        lines += ["", "official = from NSE's list. prev_close = NSE's adjusted previous close. gap_ratio = "
+                  "the overnight-gap fallback. unexplained_gap = a move beyond -40%/+80% explained by "
+                  "neither, left as a real move.", "", "Fallback gap-ratio events (not in the official list):",
+                  "", "| Symbol | Date | Factor |", "| --- | --- | --- |"]
         gap = ev[ev["kind"] == "gap_ratio"].sort_values("date", ascending=False).head(40)
         lines += [f"| {r.symbol} | {pd.Timestamp(r.date).date()} | {r.ca_factor:.4g} |" for r in gap.itertuples()]
         odd = ev[ev["kind"] == "unexplained_gap"].sort_values("date", ascending=False).head(20)
