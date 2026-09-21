@@ -25,6 +25,14 @@ def test_legacy_parse():
     assert frame.loc[0, "prev_close"] == 99 and frame.loc[0, "volume"] == 1000
 
 
+def test_legacy_2008_without_isin():
+    csv = ("SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,LAST,PREVCLOSE,TOTTRDQTY,TOTTRDVAL,TIMESTAMP,\n"
+           "ABC,EQ,100,110,95,105,105,99,1000,105000,01-JAN-2008,\n")
+    frame = nse.parse_legacy(nse._read_zipped_csv(_zip(csv)), dt.date(2008, 1, 1))
+    assert len(frame) == 1 and pd.isna(frame.loc[0, "isin"]) and pd.isna(frame.loc[0, "trades"])
+    assert frame.loc[0, "close"] == 105
+
+
 def test_udiff_parse():
     csv = ("TradDt,FinInstrmTp,ISIN,TckrSymb,SctySrs,OpnPric,HghPric,LwPric,ClsPric,PrvsClsgPric,TtlTradgVol,TtlTrfVal,TtlNbOfTxsExctd\n"
            "2024-07-08,STK,INE000A01011,ABC,EQ,100,110,95,105,99,1000,105000,50\n"
@@ -54,6 +62,36 @@ def test_split_adjustment():
     assert out.loc["XYZ"]["adj_factor"].tolist() == [1.0, 1.0]  # untouched
 
 
+
+
+def test_index_repair():
+    from pipeline import index_repair
+    history = index_repair.load_history_csv("data/nifty500_2008_2012.csv")
+    # Swapped high/low on 29 Apr 2009 is fixed on load.
+    row = history[history["date"] == pd.Timestamp("2009-04-29")].iloc[0]
+    assert row["high"] >= row["low"] and row["high"] >= row["close"]
+
+    days = [pd.Timestamp(d) for d in ["2010-05-14", "2010-05-16", "2010-05-17"]]
+    frame, report, last = index_repair.repair_year(None, days, history, lambda d: None, None)
+    assert report["from_history"] == 2 and report["carried_forward"] == ["2010-05-16"]
+    n500 = frame.set_index("date")["close"]
+    assert n500[pd.Timestamp("2010-05-16")] == n500[pd.Timestamp("2010-05-14")]
+
+    # After 2012-02-17 a missing day is re-fetched before carrying forward.
+    stored = pd.DataFrame({"date": [pd.Timestamp("2013-10-08")], "index_name": ["NIFTY 500"],
+                           "open": [1.0], "high": [1.0], "low": [1.0], "close": [100.0]})
+    fetched = pd.DataFrame({"date": [pd.Timestamp("2013-10-09")], "index_name": ["NIFTY 500"],
+                            "open": [2.0], "high": [2.0], "low": [2.0], "close": [101.0]})
+    days = [pd.Timestamp("2013-10-08"), pd.Timestamp("2013-10-09"), pd.Timestamp("2013-10-10")]
+    frame, report, _ = index_repair.repair_year(
+        stored, days, history, lambda d: fetched if d == dt.date(2013, 10, 9) else None, None)
+    assert report["fetched"] == ["2013-10-09"] and report["carried_forward"] == ["2013-10-10"]
+    assert len(frame) == 3
+
+    ok = index_repair.overlap_check(history[history["date"].dt.year == 2012], history)
+    assert ok["passed"] and ok["max_diff_pct"] == 0
+
+
 if __name__ == "__main__":
-    test_legacy_parse(); test_udiff_parse(); test_split_adjustment()
+    test_legacy_parse(); test_legacy_2008_without_isin(); test_udiff_parse(); test_split_adjustment(); test_index_repair()
     print("All offline tests passed")
