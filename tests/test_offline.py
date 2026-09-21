@@ -91,6 +91,18 @@ def test_index_repair():
     ok = index_repair.overlap_check(history[history["date"].dt.year == 2012], history)
     assert ok["passed"] and ok["max_diff_pct"] == 0
 
+    # 2012-2015 NSE files call it "CNX 500" and parquet may store dates in ms.
+    old = history[history["date"].dt.year == 2012].assign(index_name="CNX 500")
+    old["date"] = old["date"].astype("datetime64[ms]")
+    ok = index_repair.overlap_check(old, history)
+    assert ok["passed"] and ok["days"] == 251
+    frame, report, _ = index_repair.repair_year(old, list(history[history["date"].dt.year == 2012]["date"]),
+                                                history, lambda d: None, None)
+    assert report["from_history"] == 0 and set(frame["index_name"]) == {"NIFTY 500"}
+
+    none = index_repair.overlap_check(old.assign(index_name="SOMETHING 500"), history)
+    assert not none["passed"] and none["index_names_with_500"] == ["SOMETHING 500"]
+
 
 if __name__ == "__main__":
     test_legacy_parse(); test_legacy_2008_without_isin(); test_udiff_parse(); test_split_adjustment(); test_index_repair()
