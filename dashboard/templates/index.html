@@ -70,7 +70,7 @@
     <thead><tr><th>Action</th><th>Stock</th><th class="num">Amount</th></tr></thead>
     <tbody>{% for o in v.orders %}
       <tr><td>{{ 'Sell' if o.side == 'sell' else 'Buy' }}</td>
-          <td>{{ o.symbol }}<span class="sub">{{ o.reason|capitalize }}</span></td>
+          <td><a href="{{ url_for('stock', symbol=o.symbol) }}">{{ o.symbol }}</a><span class="sub">{{ o.reason|capitalize }}</span></td>
           <td class="num">{{ 'All shares' if o.side == 'sell' else (o.target_value|inr) }}</td></tr>
     {% endfor %}</tbody>
   </table></div>
@@ -84,7 +84,7 @@
   <div class="scroll"><table>
     <thead><tr><th>Stock</th><th class="num">P&amp;L</th><th class="num">Rank</th></tr></thead>
     <tbody>{% for h in v.holdings %}
-      <tr><td>{{ h.symbol }}<span class="sub">{{ h.value|inr }}, since {{ h.since|short }}</span></td>
+      <tr><td><a href="{{ url_for('stock', symbol=h.symbol) }}">{{ h.symbol }}</a><span class="sub">{{ h.value|inr }}, since {{ h.since|short }}{% if ex.get(h.symbol) %}, layers {{ ex[h.symbol].layers_passed }}/{{ ex[h.symbol].layers_checkable }}{% endif %}</span></td>
           <td class="num {{ 'gain' if h.pnl >= 0 else 'loss' }}">{{ h.pnl|pct }}</td>
           <td class="num">{{ h.rank or '–' }}<span class="sub status {{ h.status }}">{{ {'keep': 'Keep', 'watch': 'Near the cut-off', 'sell': 'Would be sold'}[h.status] }}</span></td></tr>
     {% endfor %}</tbody>
@@ -94,12 +94,14 @@
 
 <section aria-label="Strongest stocks now">
   <h2>Strongest 20 right now</h2>
-  <p class="quiet">Ranked on {{ v.ranking_date or '–' }}. Only the month-end ranking is used for trades.</p>
+  <p class="quiet">Ranked on {{ v.ranking_date or '–' }}. Only the month-end ranking is used for trades. Tap a stock to see why it ranks where it does. Layers = checks passed from the old 7-layer checklist, shown for information only.</p>
   {% if v.top %}
   <div class="scroll"><table>
-    <thead><tr><th class="num" style="text-align:left;padding-left:0">Rank</th><th>Stock</th><th>Industry</th><th class="num">Score</th></tr></thead>
-    <tbody>{% for r in v.top %}
-      <tr><td>{{ r.rank }}</td><td>{{ r.symbol }}</td><td class="quiet">{{ r.industry|title if r.industry != 'UNCLASSIFIED' else '–' }}</td>
+    <thead><tr><th>Rank</th><th>Stock</th><th class="num">Layers</th><th class="num">Score</th></tr></thead>
+    <tbody>{% for r in v.top %}{% set e = ex.get(r.symbol) %}
+      <tr><td>{{ r.rank }}</td>
+          <td><a href="{{ url_for('stock', symbol=r.symbol) }}">{{ r.symbol }}</a><span class="sub">{{ r.industry|title if r.industry != 'UNCLASSIFIED' else 'Industry not listed' }}</span></td>
+          <td class="num">{% if e %}{{ e.layers_passed }}/{{ e.layers_checkable }}{% else %}–{% endif %}</td>
           <td class="num">{{ '%.2f'|format(r.score|float) }}</td></tr>
     {% endfor %}</tbody>
   </table></div>

@@ -27,7 +27,23 @@ def state(with_positions=True, pending=False):
     return s
 
 
+EXPLAIN = {"S0": {"symbol": "S0", "date": "2026-10-02", "industry": "CAPITAL GOODS", "held": True, "rank": 1,
+                  "score": 2.51, "ret_6m": 0.45, "ret_12m": 1.27, "volatility": 0.27,
+                  "why": "Up 45% in 6 months and 127% in 12 months, with low volatility (27% a year).",
+                  "sell_line": "Rank 1: inside the top 20. Safe: it is kept at the month-end check.",
+                  "rank_history": [{"date": "2026-05-29", "rank": 14}, {"date": "2026-06-30", "rank": 38},
+                                   {"date": "2026-07-31", "rank": None}, {"date": "today", "rank": 1}],
+                  "eligibility": {"Among the 500 most-traded NSE stocks": True, "Share price at least Rs 50": True},
+                  "eligible": True, "layers_passed": 3, "layers_checkable": 5,
+                  "layers": [{"layer": 1, "name": "Market regime", "status": "pass", "detail": "ON"},
+                             {"layer": 3, "name": "Trend template", "status": "fail", "detail": "7 of 8",
+                              "checks": {"Price above the 50-day average": True, "Within 25% of the 52-week high": False}},
+                             {"layer": 5, "name": "Fundamentals", "status": "no_data", "detail": "Not connected yet."}],
+                  "context": {"close": 520.0, "from_52w_high": -0.04, "above_200_day_average": True}}}
+
+
 def client_with(st):
+    dash.load_explanations = lambda: EXPLAIN
     dash.load_state = lambda: st
     dash.load_ranking = lambda: ("2026-10-02", RANKING)
     dash.last_run = lambda: {"run_at": "2026-10-02T14:40:00", "status": "ok"}
@@ -68,11 +84,22 @@ def test_pages():
     assert "Rebalance orders are ready" in orders and "₹51,575" in orders and "All shares" in orders
 
 
+def test_stock_page():
+    c = client_with(state())
+    c.post("/login", data={"password": "secret"})
+    page = c.get("/stock/S0").get_data(as_text=True)
+    assert "Up 45% in 6 months" in page and "3 of 5 checkable layers" in page and "For information only" in page
+    assert "Within 25% of the 52-week high" in page and "₹520.00" in page
+    assert c.get("/stock/NOPE").status_code == 404
+    home = c.get("/").get_data(as_text=True)
+    assert "/stock/S0" in home and "3/5" in home
+
+
 def test_month_strip():
     s = dash.month_strip(dt.date(2026, 10, 12))
     assert s["rebalance"] == dt.date(2026, 10, 30) and s["left"] == 14 and len(s["days"]) == 22
 
 
 if __name__ == "__main__":
-    test_inr(); test_login_required(); test_pages(); test_month_strip()
+    test_inr(); test_login_required(); test_pages(); test_stock_page(); test_month_strip()
     print("All dashboard tests passed")

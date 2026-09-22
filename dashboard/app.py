@@ -70,6 +70,11 @@ def load_state():
     return json.loads(raw) if raw else None
 
 
+def load_explanations():
+    raw = cached("explain", lambda: storage_get("live/explain/latest.json"))
+    return json.loads(raw) if raw else {}
+
+
 def load_ranking():
     def loader():
         names = sorted(n for n in storage_list("live/rankings") if n.endswith(".csv"))
@@ -202,8 +207,24 @@ def home():
     except Exception as error:  # show the problem instead of a blank page
         state, ranking_date, ranking, run = None, None, [], None
         problems.append(f"Could not reach Supabase ({type(error).__name__}). Check SUPABASE_URL and SUPABASE_SERVICE_KEY in Render.")
+    try:
+        explanations = load_explanations()
+    except Exception:
+        explanations = {}
     view = build_view(state, ranking_date, ranking, today)
-    return render_template("index.html", v=view, run=run, problems=problems)
+    return render_template("index.html", v=view, run=run, problems=problems, ex=explanations)
+
+
+@app.route("/stock/<symbol>")
+@login_required
+def stock(symbol):
+    try:
+        info = load_explanations().get(symbol)
+    except Exception:
+        info = None
+    if not info:
+        return render_template("stock.html", info=None, symbol=symbol), 404
+    return render_template("stock.html", info=info, symbol=symbol)
 
 
 @app.route("/healthz")

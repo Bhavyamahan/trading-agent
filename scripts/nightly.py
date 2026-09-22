@@ -16,7 +16,7 @@ import pandas as pd
 import requests
 
 from pipeline import storage
-from strategy import data, features, live, momentum
+from strategy import data, explain, features, live, momentum
 from strategy.config import V12
 from scripts.run_backtest import ever_in_universe
 
@@ -47,8 +47,17 @@ def build_ranking(f: pd.DataFrame, day: pd.Timestamp) -> pd.DataFrame:
     return table.reset_index(drop=True).assign(rank=lambda x: range(1, len(x) + 1))
 
 
+def buy_reason(info: dict | None, with_rank: bool = True) -> str:
+    if not info or info.get("ret_6m") is None:
+        return ""
+    lead = f"rank {info['rank']}: " if with_rank else ""
+    return (f" ({lead}{info['ret_6m'] * 100:+.0f}% in 6m, {info['ret_12m'] * 100:+.0f}% in 12m, "
+            f"layers {info['layers_passed']}/{info['layers_checkable']})")
+
+
 def report(state: dict, day: dt.date, result: dict, ranking: pd.DataFrame, holidays_ok: bool,
-           nifty: float | None) -> tuple[str, str]:
+           nifty: float | None, explanations: dict | None = None) -> tuple[str, str]:
+    explanations = explanations or {}
     snap = state["snapshots"][-1] if state["snapshots"] else None
     lines = [f"# Momentum agent: {day}", ""]
     if not state["start_date"] and not state["pending"]:
@@ -82,7 +91,9 @@ def report(state: dict, day: dt.date, result: dict, ranking: pd.DataFrame, holid
                   "| Action | Stock | Amount | Why |", "| --- | --- | --- | --- |"]
         for o in result["orders"]:
             amount = "all shares" if o["side"] == "sell" else f"Rs {o['target_value']:,.0f}"
-            lines.append(f"| {o['side'].upper()} | {o['symbol']} | {amount} | {o['reason']} |")
+            why = (o["reason"] + buy_reason(explanations.get(o["symbol"]), with_rank=False)
+                   if o["side"] == "buy" else o["reason"])
+            lines.append(f"| {o['side'].upper()} | {o['symbol']} | {amount} | {why} |")
         lines.append("")
     else:
         lines += [f"No rebalance tonight. Next rebalance: the last trading day of this month"
@@ -96,8 +107,10 @@ def report(state: dict, day: dt.date, result: dict, ranking: pd.DataFrame, holid
         short.append(f"Paper equity Rs {snap['equity']:,.0f} ({snap['equity'] / state['starting_capital'] * 100 - 100:+.2f}%)")
     if result.get("orders"):
         short.append("REBALANCE tomorrow at the open:")
-        short += [f"{o['side'].upper()} {o['symbol']}" + ("" if o["side"] == "sell" else f" Rs {o['target_value']:,.0f}")
+        short += [f"{o['side'].upper()} {o['symbol']}" + ("" if o["side"] == "sell" else
+                  f" Rs {o['target_value']:,.0f}" + buy_reason(explanations.get(o["symbol"])))
                   for o in result["orders"]]
+        short.append("Why each stock: open your dashboard and tap its name.")
     short.append("Top 5: " + ", ".join(ranking["symbol"].head(5)))
     return text, "\n".join(short)
 
@@ -161,7 +174,19 @@ def main():
                               float(nifty.get(day_ts, float("nan"))), list(ranking["symbol"]), holidays, V12)
     if result.get("skipped"):
         log(result["reason"])
-    text, short = report(state, day, result, ranking, bool(holidays), float(nifty.get(day_ts, float("nan"))))
+
+    # "Why this stock": momentum numbers, rank history, eligibility and the 7-layer checklist
+    month_ends = [d for d in momentum.month_end_dates(nifty.index) if d < day_ts][-6:]
+    history_tables = {d: g for d, g in momentum.rank_table(f, pd.DatetimeIndex(month_ends)).groupby("date")}
+    held = set(state["positions"])
+    pending = {o["symbol"] for o in state["pending"]}
+    explanations = explain.build_all(f, ranking, history_tables, str(regime.get(day_ts, "OFF")), V12, held, pending)
+    log(f"Explanations built for {len(explanations)} stocks")
+    storage.upload_bytes("live/explain/latest.json", json.dumps(explanations, default=str).encode(), "application/json")
+    storage.upload_bytes(f"live/explain/{day}.json", json.dumps(explanations, default=str).encode(), "application/json")
+
+    text, short = report(state, day, result, ranking, bool(holidays), float(nifty.get(day_ts, float("nan"))),
+                         explanations)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
             handle.write(text)

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ symbol }} · Momentum agent{% endblock %}
+{% block head %}
+<style>
+  .back { font-size: .9rem; color: var(--slate); text-decoration: none; }
+  .lead { font-size: 1.1rem; }
+  .history { display: flex; gap: .35rem; margin: .5rem 0 0; }
+  .history div { flex: 1; text-align: center; border-top: 3px solid var(--line); padding-top: .35rem; font-size: .8rem; color: var(--slate); }
+  .history div strong { display: block; font-size: 1.05rem; color: var(--ink); font-weight: 600; }
+  .history div.in { border-top-color: var(--ink); }
+  .history div.edge { border-top-color: var(--mark); }
+  .history div.out { border-top-color: var(--loss); }
+  ul.checks { list-style: none; padding: 0; margin: 0; }
+  ul.checks > li { padding: .6rem 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 1.6rem 1fr; gap: .25rem .5rem; }
+  .mark { font-weight: 700; }
+  .mark.pass { color: var(--gain); } .mark.fail { color: var(--loss); } .mark.partial { color: #9A6B00; } .mark.no_data { color: var(--slate); }
+  @media (prefers-color-scheme: dark) { .mark.partial { color: var(--mark); } }
+  ul.sub-checks { list-style: none; padding: 0; margin: .35rem 0 0; grid-column: 2; font-size: .9rem; color: var(--slate); }
+  ul.sub-checks li { padding: .1rem 0; }
+  .note { border-left: 4px solid var(--line); padding: .25rem 0 .25rem 1rem; color: var(--slate); font-size: .9rem; }
+  dl.context { display: grid; grid-template-columns: auto 1fr; gap: .4rem 1rem; margin: 0; }
+  dl.context dt { color: var(--slate); } dl.context dd { margin: 0; }
+</style>
+{% endblock %}
+{% block body %}
+<a class="back" href="{{ url_for('home') }}">Back to the overview</a>
+{% if not info %}
+  <h1 style="margin-top:1rem">{{ symbol }}</h1>
+  <p>There is no explanation for this stock today. Explanations cover the top 60 and anything held or ordered, and refresh every weekday evening.</p>
+{% else %}
+{% set icon = {'pass': '✓', 'fail': '✗', 'partial': '~', 'no_data': '–'} %}
+<section aria-label="Why it ranks here" style="padding-top:1rem">
+  <h1>{{ info.symbol }}</h1>
+  <p class="quiet">{{ info.industry|title if info.industry != 'UNCLASSIFIED' else 'Industry not listed' }}{% if info.held %}, in the paper portfolio{% endif %}. Data as of {{ info.date|short }}.</p>
+  {% if info.why %}<p class="lead">{{ info.why }}</p>{% endif %}
+  <p>{{ info.sell_line }}</p>
+</section>
+
+<section aria-label="Rank history">
+  <h2>Rank at each month-end</h2>
+  <div class="history">
+    {% for h in info.rank_history %}
+      {% set cls = 'in' if h.rank and h.rank <= 20 else 'edge' if h.rank and h.rank <= 40 else 'out' %}
+      <div class="{{ cls }}"><strong>{{ h.rank or '–' }}</strong>{{ 'Today' if h.date == 'today' else h.date|short }}</div>
+    {% endfor %}
+  </div>
+  <p class="quiet" style="margin-top:.75rem">Top 20 are bought, 21 to 40 are kept if already held, beyond 40 are sold at the month-end.</p>
+</section>
+
+<section aria-label="Momentum numbers">
+  <h2>The numbers behind the rank</h2>
+  <dl class="context">
+    <dt>6-month return</dt><dd>{{ info.ret_6m|pct }}</dd>
+    <dt>12-month return</dt><dd>{{ info.ret_12m|pct }}</dd>
+    <dt>Volatility</dt><dd>{{ info.volatility|pct(false) }} a year</dd>
+    <dt>Momentum score</dt><dd>{{ '%.2f'|format(info.score) if info.score is not none else '–' }}</dd>
+  </dl>
+  <p class="quiet" style="margin-top:.75rem">The score divides each return by the volatility, so a smooth rise beats a bumpy one, then compares the stock with every other eligible stock.</p>
+</section>
+
+<section aria-label="Eligibility">
+  <h2>Eligibility checks</h2>
+  <ul class="checks">
+    {% for label, ok in info.eligibility.items() %}
+      <li><span class="mark {{ 'pass' if ok else 'fail' }}">{{ '✓' if ok else '✗' }}</span><span>{{ label }}</span></li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section aria-label="Seven-layer checklist">
+  <h2>7-layer checklist: {{ info.layers_passed }} of {{ info.layers_checkable }} checkable layers passed</h2>
+  <p class="note">For information only. Trades use the momentum rank alone, which is the tested strategy. These layers come from the retired breakout rulebook.</p>
+  <ul class="checks">
+    {% for l in info.layers %}
+      <li><span class="mark {{ l.status }}">{{ icon[l.status] }}</span>
+          <span><strong>{{ l.layer }}. {{ l.name }}</strong><span class="sub">{{ l.detail }}</span></span>
+          {% if l.checks %}<ul class="sub-checks">{% for label, ok in l.checks.items() %}<li>{{ '✓' if ok else '✗' }} {{ label }}</li>{% endfor %}</ul>{% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section aria-label="Background">
+  <h2>Background</h2>
+  <dl class="context">
+    <dt>Last close</dt><dd>{{ info.context.close|inr(2) }}</dd>
+    <dt>From its 52-week high</dt><dd>{{ info.context.from_52w_high|pct }}</dd>
+    <dt>Above its 200-day average</dt><dd>{{ 'Yes' if info.context.above_200_day_average else 'No' if info.context.above_200_day_average is not none else '–' }}</dd>
+  </dl>
+</section>
+{% endif %}
+{% endblock %}
