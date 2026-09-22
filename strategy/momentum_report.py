@@ -60,6 +60,23 @@ COLUMNS = [("cagr_after_tax_pct", "CAGR after tax %"), ("cagr_pre_tax_pct", "CAG
            ("closed_positions", "Positions closed"), ("win_rate_pct", "Win %"), ("avg_days_held", "Avg days held")]
 
 
+def compare_with_fund(curve: pd.Series | None, fund: pd.Series | None, nifty: pd.Series) -> dict | None:
+    """Strategy vs the Nifty200 Momentum 30 index over the dates both exist."""
+    if curve is None or fund is None or len(fund) < 250:
+        return None
+    start = max(curve.index[0], fund.index[0])
+    s, f = curve[curve.index >= start], fund.reindex(curve.index).ffill()
+    f = f[f.index >= start].dropna()
+    s = s.reindex(f.index)
+    n = nifty.reindex(f.index).ffill()
+    return {"from": str(f.index[0].date()), "to": str(f.index[-1].date()),
+            "strategy_after_tax_cagr_pct": round(cagr(s) * 100, 2),
+            "momentum30_index_cagr_pct": round(cagr(f) * 100, 2),
+            "nifty500_cagr_pct": round(cagr(n) * 100, 2),
+            "strategy_max_dd_pct": round(max_drawdown(s) * 100, 1),
+            "momentum30_max_dd_pct": round(max_drawdown(f) * 100, 1)}
+
+
 def passes(m: dict) -> dict:
     return {"CAGR after tax >= Nifty 500 + 3 pts": m["cagr_after_tax_pct"] >= m["nifty500_cagr_pct"] + 3,
             "Max drawdown no worse than Nifty 500": m["max_drawdown_pct"] <= m["nifty500_max_dd_pct"],
@@ -67,7 +84,7 @@ def passes(m: dict) -> dict:
             if not np.isnan(m["beat_3y_windows_pct"]) else False}
 
 
-def markdown(summary: dict, years: dict, exits: dict, diagnostics: dict) -> str:
+def markdown(summary: dict, years: dict, exits: dict, diagnostics: dict, fund: dict | None = None) -> str:
     lines = ["# Backtest report: Rulebook v2.0, momentum rotation", "",
              "Top 20 by volatility-adjusted 6- and 12-month momentum, sold when outside the top 40, "
              "rebalanced monthly at the next open. Costs, slippage and current Indian capital-gains tax "
@@ -84,13 +101,39 @@ def markdown(summary: dict, years: dict, exits: dict, diagnostics: dict) -> str:
             for k in extra if k in m and v == "M0")]
     lines += ["", "Index figures are price-only (no dividends, worth about 1 to 1.5% a year); the strategy's "
               "stock prices are price-only too, so the comparison is like for like.", "",
-              "## Pass criteria (fixed before testing)", "", "| Variant | Period | Criterion | Pass |",
-              "| --- | --- | --- | --- |"]
+              "## Pass criteria for the base strategy M0 (fixed before testing)", "",
+              "| Variant | Period | Criterion | Pass |", "| --- | --- | --- | --- |"]
     for (variant, period), m in summary.items():
-        if period == "full":
+        if period == "full" or variant != "M0":
             continue
         for label, ok in passes(m).items():
             lines.append(f"| {variant} | {period} | {label} | {'yes' if ok else 'no'} |")
+    lines += ["", "## Robustness: does every variant beat the Nifty 500 after tax?", "",
+              "Robust = every M0 variant beats the index after tax in both periods (not just the base case).", "",
+              "| Variant | In-sample excess (pts) | Out-of-sample excess (pts) | Full-period max DD % | Beats both |",
+              "| --- | --- | --- | --- | --- |"]
+    names = list(dict.fromkeys(v for v, _ in summary))
+    robust = True
+    for name in names:
+        ins, oos, full = summary.get((name, "in_sample")), summary.get((name, "out_of_sample")), summary.get((name, "full"))
+        if not (ins and oos and full):
+            continue
+        e1 = ins["cagr_after_tax_pct"] - ins["nifty500_cagr_pct"]
+        e2 = oos["cagr_after_tax_pct"] - oos["nifty500_cagr_pct"]
+        ok = e1 > 0 and e2 > 0
+        if name.startswith("M0"):
+            robust &= ok
+        lines.append(f"| {name} | {_fmt(round(e1, 2))} | {_fmt(round(e2, 2))} | {_fmt(full['max_drawdown_pct'])} | "
+                     f"{'yes' if ok else 'no'} |")
+    lines += ["", f"**Robustness verdict: {'PASS' if robust else 'FAIL'}** (M1 is shown for reference only).", ""]
+    if fund:
+        lines += ["## Versus simply buying a Nifty200 Momentum 30 fund", "",
+                  f"Over {fund['from']} to {fund['to']} (the dates the index data covers):", "",
+                  "| | CAGR % | Max DD % |", "| --- | --- | --- |",
+                  f"| Our strategy (M0, after tax) | {_fmt(fund['strategy_after_tax_cagr_pct'])} | {_fmt(fund['strategy_max_dd_pct'])} |",
+                  f"| Nifty200 Momentum 30 index (before fund fees and tax) | {_fmt(fund['momentum30_index_cagr_pct'])} | "
+                  f"{_fmt(fund['momentum30_max_dd_pct'])} |",
+                  f"| Nifty 500 | {_fmt(fund['nifty500_cagr_pct'])} | |", ""]
     for variant, table in years.items():
         lines += ["", f"## Year by year, {variant} (after tax, full period)", "", "| Year | Strategy % | Nifty 500 % |",
                   "| --- | --- | --- |"]

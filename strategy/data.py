@@ -6,6 +6,7 @@ industry: symbol -> NSE industry label ("UNCLASSIFIED" when unknown)
 """
 import io
 import os
+import re
 
 import pandas as pd
 import requests
@@ -22,9 +23,28 @@ INDUSTRY_URLS = [
 ]
 LOCAL_INDUSTRY_CSV = "data/industry.csv"  # optional manual override: Symbol,Industry
 UNCLASSIFIED = "UNCLASSIFIED"
-LAST_EVENTS = {"events": None, "official_audit": [], "official_sources": []}
+LAST_EVENTS = {"events": None, "official_audit": [], "official_sources": [], "excluded_funds": []}
+
+
+def fund_symbols(frame: pd.DataFrame) -> set[str]:
+    """Symbols that are funds, not companies: ISIN starting INF, or a fund-like name."""
+    symbols = frame["symbol"].astype(str)
+    if "isin" in frame.columns:
+        isin = frame["isin"].astype(str)
+        by_isin = set(symbols[isin.str.startswith("INF")])
+        with_isin = set(symbols[isin.str.startswith("IN")])
+    else:
+        by_isin, with_isin = set(), set()
+    no_isin = set(symbols.unique()) - with_isin
+    by_name = {s for s in no_isin if FUND_NAME.search(s)}
+    return by_isin | by_name
 PRICE_COLUMNS = ["date", "symbol", "series", "open", "high", "low", "close",
                  "prev_close", "volume", "value"]
+# Funds that trade like shares (ETFs, liquid/gold/index funds) are not companies.
+# Their ISIN starts with INF (company shares start with INE). For old rows without
+# an ISIN, names are checked as a backup.
+FUND_NAME = re.compile(r"BEES$|ETF|^LIQUID|GOLDSHARE|^SETF|^NIFTY|SENSEX|^M50$|^M100$|^MON100$|"
+                       r"^MAFANG$|^HNGSNGBEES|GILT|^CPSE|^BHARAT22|^N100$|^INFRABEES", re.I)
 
 
 def load_prices(years: list[int] | None = None) -> pd.DataFrame:
@@ -34,25 +54,37 @@ def load_prices(years: list[int] | None = None) -> pd.DataFrame:
     for year in years:
         frame = storage.load_parquet(f"equity/{year}.parquet")
         if frame is not None:
-            frame = frame[PRICE_COLUMNS]
+            columns = PRICE_COLUMNS + (["isin"] if "isin" in frame.columns else [])
+            frame = frame[columns]
             frame = frame[frame["series"].isin(["EQ", "BE", "BZ"])].copy()
+            if "isin" in frame.columns:
+                frame["isin"] = frame["isin"].astype("category")
             frame["symbol"] = frame["symbol"].astype("category")
             frame["series"] = frame["series"].astype("category")
             frames.append(frame)
             print(f"  loaded equity {year}: {len(frame):,} rows", flush=True)
     # Give every year the same category list so concatenation stays compact.
-    for column in ["symbol", "series"]:
+    for fr in frames:
+        if "isin" not in fr.columns:
+            fr["isin"] = pd.Categorical([None] * len(fr))
+    for column in ["symbol", "series", "isin"]:
         union = sorted(set().union(*[set(fr[column].cat.categories) for fr in frames]))
         for fr in frames:
             fr[column] = fr[column].cat.set_categories(union)
+    prices = pd.concat(frames, ignore_index=True)
+    funds = fund_symbols(prices)
+    LAST_EVENTS["excluded_funds"] = sorted(funds)
+    prices = prices[~prices["symbol"].astype(str).isin(funds)].drop(columns="isin")
+    prices["symbol"] = prices["symbol"].cat.remove_unused_categories()
+    print(f"  excluded {len(funds)} ETFs/funds (ISIN INF or fund-like name)", flush=True)
     official, sources = corporate_actions.load_official_events()
     LAST_EVENTS["official_sources"] = sources
     print(f"  official corporate actions: {len(official):,} events from {sources}", flush=True)
-    return prepare_prices(pd.concat(frames, ignore_index=True), official)
+    return prepare_prices(prices, official)
 
 
 def prepare_prices(raw: pd.DataFrame, official: pd.DataFrame | None = None) -> pd.DataFrame:
-    raw = raw.copy()
+    raw = raw.drop(columns=["isin"], errors="ignore").copy()
     raw["date"] = pd.to_datetime(raw["date"]).astype("datetime64[ns]")
     # A symbol can appear twice on one day only through data errors; keep EQ first.
     raw["series_rank"] = raw["series"].astype(str).map({"EQ": 0, "BE": 1, "BZ": 2}).fillna(3)

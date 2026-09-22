@@ -37,7 +37,7 @@ def test_rotation_and_buffer():
                             Variant("T", False, False, ""), ZERO, MomentumParams(holdings=1, buffer_rank=2))
     t = res["trades"]
     assert list(t["symbol"]) == ["A", "C"], t
-    assert t.iloc[0]["exit_reason"] == "dropped_out_of_top_40" and t.iloc[1]["exit_reason"] == "end_of_test"
+    assert t.iloc[0]["exit_reason"] == "dropped_out_of_buffer" and t.iloc[1]["exit_reason"] == "end_of_test"
     eq = res["equity"]
     assert abs(eq["equity"].iloc[-1] - (ZERO.starting_capital + t["net_pnl"].sum() - res["taxes_paid"])) < 1
 
@@ -79,17 +79,31 @@ def test_pipeline_accounting():
     ranks = momentum.rank_table(f, momentum.month_end_dates(nifty.index))
     book = Book(f, ranks["symbol"].unique())
     cal = nifty.index[nifty.index >= "2010-01-01"]
+    mid = momentum.rank_table(f, momentum.mid_month_dates(nifty.index))
     for v in momentum.VARIANTS:
-        res = simulate_momentum(ranks, book, cal, regime, v, V12)
+        table = mid if v.schedule == "mid_month" else ranks
+        res = simulate_momentum(table, book, cal, regime, v, V12)
         t, eq = res["trades"], res["equity"]
-        assert len(t) > 0 and (eq["positions"] <= 20).all()
+        assert len(t) > 0 and (eq["positions"] <= v.holdings).all()
         assert abs(eq["equity"].iloc[-1] - (V12.starting_capital + t["net_pnl"].sum() - res["taxes_paid"])) < 1.0
         assert eq["equity"].min() > 0
         print(v.name, "positions closed:", len(t), "final equity:", round(eq["equity"].iloc[-1]),
               "invested %:", round(float((eq["invested"] / eq["equity"]).mean() * 100), 1))
 
 
+def test_mid_month_dates():
+    cal = pd.bdate_range("2020-01-01", "2020-04-30")
+    mids = momentum.mid_month_dates(cal)
+    assert [d.day for d in mids] == [15, 14, 13]  # Jan 15 (Wed), Feb 14 (Fri), Mar 13 (Fri); April is the last month
+
+
+def test_fund_exclusion_in_loader():
+    from strategy.data import fund_symbols
+    df = pd.DataFrame({"symbol": ["LIQUID1", "GOLDIAM", "GOLDBEES"], "isin": ["INF1", "INE1", None]})
+    assert fund_symbols(df) == {"LIQUID1", "GOLDBEES"}
+
+
 if __name__ == "__main__":
     test_rotation_and_buffer(); test_regime_exit_and_reentry(); test_tax_short_vs_long_term()
-    test_pipeline_accounting()
+    test_mid_month_dates(); test_fund_exclusion_in_loader(); test_pipeline_accounting()
     print("All momentum tests passed")

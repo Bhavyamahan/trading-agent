@@ -32,27 +32,34 @@ def main():
     del prices
     f, regime, diag = features.add_layers(f, nifty, industry, p)
     f = momentum.add_volatility(f)
-    month_ends = momentum.month_end_dates(nifty.index)
-    ranks = momentum.rank_table(f, month_ends)
+    tables = {sched: momentum.rank_table(f, momentum.rebalance_dates(nifty.index, sched))
+              for sched in ("month_end", "mid_month")}
+    ranks = tables["month_end"]
     log(f"Ranked {ranks['date'].nunique()} month-ends, {len(ranks):,} stock-months")
-    top = ranks.groupby("date").head(60)["symbol"].unique()
+    top = pd.concat([t.groupby("date").head(70)["symbol"] for t in tables.values()]).unique()
     book = Book(f, top)
-    summary, years, exits, all_trades = {}, {}, {}, []
+    summary, years, exits, all_trades, curves = {}, {}, {}, [], {}
     for v in momentum.VARIANTS:
+        table = tables[v.schedule]
         for period, (start, end) in PERIODS.items():
             cal = nifty.index[(nifty.index >= start) & (nifty.index <= end)]
-            res = momentum.simulate_momentum(ranks[ranks["date"].between(cal[0], cal[-1])], book, cal, regime, v, p)
+            res = momentum.simulate_momentum(table[table["date"].between(cal[0], cal[-1])], book, cal, regime, v, p)
             summary[(v.name, period)] = mr.metrics(res, nifty, extra)
             log(f"{v.name} {period}: {summary[(v.name, period)]}")
             if period == "full":
-                years[v.name] = mr.yearly(res["equity"], nifty)
+                curves[v.name] = res["equity"]["equity"]
+                if v.name in ("M0", "M1"):
+                    years[v.name] = mr.yearly(res["equity"], nifty)
                 exits[v.name] = res["trades"]["exit_reason"].value_counts().to_dict() if len(res["trades"]) else {}
                 all_trades.append(res["trades"])
+    fund_compare = mr.compare_with_fund(curves.get("M0"), extra.get("nifty200_momentum30"), nifty)
+    excluded = data.LAST_EVENTS.get("excluded_funds", [])
     diagnostics = {"stocks_ranked_per_month_median": int(ranks.groupby("date").size().median()),
+                   "excluded_etfs_and_funds": f"{len(excluded)} (e.g. {', '.join(excluded[:25])})",
                    "benchmarks_found": ", ".join(extra) or "none besides NIFTY 500",
                    "regime_days_since_2010": regime[regime.index >= "2010-01-01"].value_counts().to_dict(),
                    "liquidity_threshold_cr": p.min_adv_crore}
-    text = mr.markdown(summary, years, exits, diagnostics)
+    text = mr.markdown(summary, years, exits, diagnostics, fund_compare)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
             fh.write(text)
@@ -61,6 +68,8 @@ def main():
     storage.upload_bytes(f"{folder}/report.md", text.encode(), "text/markdown")
     storage.upload_bytes(f"{folder}/positions.csv", pd.concat(all_trades).to_csv(index=False).encode(), "text/csv")
     latest = ranks[ranks["date"] == ranks["date"].max()].head(40)
+    if len(latest) and latest["symbol"].str.contains("LIQUID|BEES|ETF", regex=True).any():
+        log("WARNING: fund-like symbols still present in the latest ranking")
     storage.upload_bytes(f"{folder}/latest_ranking.csv", latest.to_csv(index=False).encode(), "text/csv")
     storage.log_run("momentum_backtest", "ok", {"folder": folder, "results": {
         "|".join(k): m for k, m in summary.items()}})

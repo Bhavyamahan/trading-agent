@@ -44,13 +44,35 @@ class Variant:
     regime_switch: bool
     stock_trend: bool
     description: str
+    holdings: int = 20
+    buffer_rank: int = 40
+    schedule: str = "month_end"      # "month_end" or "mid_month"
+    cost_multiplier: float = 1.0
 
 
 VARIANTS = [
-    Variant("M0", False, False, "Pure momentum: top 20, buffer 40, monthly"),
-    Variant("M1", True, False, "M0 + move to cash when the market regime is OFF"),
-    Variant("M2", True, True, "M1 + each stock must be above its own 200-day average"),
+    Variant("M0", False, False, "Base: top 20, sell outside top 40, month-end"),
+    Variant("M0-15", False, False, "15 stocks", holdings=15, buffer_rank=30),
+    Variant("M0-25", False, False, "25 stocks", holdings=25, buffer_rank=50),
+    Variant("M0-30", False, False, "30 stocks", holdings=30, buffer_rank=60),
+    Variant("M0-buf30", False, False, "Sell outside top 30", buffer_rank=30),
+    Variant("M0-buf60", False, False, "Sell outside top 60", buffer_rank=60),
+    Variant("M0-mid", False, False, "Rebalance mid-month", schedule="mid_month"),
+    Variant("M0-2xcost", False, False, "Double slippage and brokerage", cost_multiplier=2.0),
+    Variant("M1", True, False, "Reference: cash when regime OFF (failed v2.0 test)"),
 ]
+
+
+def mid_month_dates(calendar: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Last trading day on or before the 15th of each month."""
+    s = pd.Series(calendar, index=calendar)
+    early = s[s.dt.day <= 15]
+    picks = early.groupby(early.index.to_period("M")).max()
+    return pd.DatetimeIndex(picks.to_numpy())[:-1] if len(picks) else pd.DatetimeIndex([])
+
+
+def rebalance_dates(calendar: pd.DatetimeIndex, schedule: str) -> pd.DatetimeIndex:
+    return mid_month_dates(calendar) if schedule == "mid_month" else month_end_dates(calendar)
 
 
 def month_end_dates(calendar: pd.DatetimeIndex) -> pd.DatetimeIndex:
@@ -83,7 +105,13 @@ def rank_table(f: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.DataFrame:
 
 
 def simulate_momentum(ranks: pd.DataFrame, book: Book, calendar: pd.DatetimeIndex, regime: pd.Series,
-                      variant: Variant, p: Params, mp: MomentumParams = MomentumParams()) -> dict:
+                      variant: Variant, p: Params, mp: MomentumParams | None = None) -> dict:
+    from dataclasses import replace as _replace
+    if mp is None:
+        mp = MomentumParams(holdings=variant.holdings, buffer_rank=variant.buffer_rank)
+    if variant.cost_multiplier != 1.0:
+        m = variant.cost_multiplier
+        p = _replace(p, slippage=p.slippage * m, brokerage_per_order=p.brokerage_per_order * m)
     cash = p.starting_capital
     holdings: dict[str, dict] = {}
     pending_sells: dict[str, str] = {}
@@ -91,7 +119,7 @@ def simulate_momentum(ranks: pd.DataFrame, book: Book, calendar: pd.DatetimeInde
     trades, rows = [], []
     fy_st, fy_lt, carry_st, carry_lt, taxes_paid = 0.0, 0.0, 0.0, 0.0, 0.0
     bought_value = 0.0
-    rebalance_days = set(month_end_dates(calendar))
+    rebalance_days = set(rebalance_dates(calendar, variant.schedule))
     by_date = {d: g for d, g in ranks.groupby("date")}
     in_market = True
 
@@ -206,7 +234,7 @@ def simulate_momentum(ranks: pd.DataFrame, book: Book, calendar: pd.DatetimeInde
             keep_zone = set(order[:mp.buffer_rank])
             for sym in holdings:
                 if sym not in keep_zone and sym not in pending_sells:
-                    pending_sells[sym] = "dropped_out_of_top_40"
+                    pending_sells[sym] = "dropped_out_of_buffer"
             staying = [s for s in holdings if s not in pending_sells]
             slots = mp.holdings - len(staying)
             target = equity / mp.holdings
