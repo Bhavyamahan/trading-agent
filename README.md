@@ -52,3 +52,11 @@ History starts in 2008 so the indicators (200-DMA, 52-week range) are ready by 2
 
 Run *Actions → "4 - Backtest (Step 4a)"*. The report appears on the run's summary page and is
 saved with the trade lists to `results/step4a/<timestamp>/` in the `market-data` bucket.
+
+## Live agent (Rulebook v2.0)
+
+`7 - Nightly agent` runs at 20:00 IST on weekdays: it adds the day's NSE data, ranks the market,
+runs one evening of the paper portfolio and publishes the report on the run's summary page
+(also `live/latest_report.md`; the full state is `live/paper_state.json`). Month-end evenings list
+the orders for the next open. Optional Telegram alert: add secrets `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_CHAT_ID`.
