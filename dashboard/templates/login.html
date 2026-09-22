@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Momentum agent{% endblock %}
+{% block head %}
+<style>
+  form { margin-top: 1.5rem; display: grid; gap: .75rem; max-width: 20rem; }
+  input { padding: .7rem .8rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+  button { padding: .7rem .8rem; border: 0; border-radius: 6px; background: var(--ink); color: var(--paper); font-weight: 600; cursor: pointer; }
+  .error { color: var(--loss); }
+</style>
+{% endblock %}
+{% block body %}
+<h1>Momentum agent</h1>
+<p class="quiet">Your private view of the paper portfolio and the monthly rebalance.</p>
+<form method="post">
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+  <button type="submit">Sign in</button>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+</form>
+{% endblock %}

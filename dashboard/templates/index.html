@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block head %}
+<style>
+  .strip { display: flex; gap: 4px; align-items: flex-end; margin: 1.25rem 0 .5rem; }
+  .strip span { flex: 1; height: 2.25rem; border-radius: 3px; background: var(--line); position: relative; }
+  .strip span.past { background: var(--slate); opacity: .55; }
+  .strip span.today { background: var(--ink); height: 2.75rem; }
+  .strip span.rebalance { background: var(--mark); height: 3.25rem; }
+  .strip span.today.rebalance { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .strip-key { display: flex; justify-content: space-between; font-size: .85rem; color: var(--slate); }
+  .figures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 0; }
+  .figures div { border-left: 2px solid var(--line); padding-left: .75rem; }
+  .figures dt { font-size: .85rem; color: var(--slate); }
+  .figures dd { margin: .1rem 0 0; font-size: 1.35rem; font-weight: 600; }
+  @media (max-width: 30rem) { .figures { grid-template-columns: 1fr 1fr; } .figures div:last-child { grid-column: span 2; } }
+  .chart { position: relative; height: 15rem; margin-top: 1.25rem; }
+  .status { font-size: .85rem; font-weight: 500; }
+  .status.keep { color: var(--slate); } .status.watch { color: #9A6B00; } .status.sell { color: var(--loss); }
+  @media (prefers-color-scheme: dark) { .status.watch { color: var(--mark); } }
+  .action { border-left: 4px solid var(--mark); padding: .25rem 0 .25rem 1rem; margin-bottom: 1rem; }
+  .problem { border-left: 4px solid var(--loss); padding: .25rem 0 .25rem 1rem; }
+  footer { font-size: .85rem; color: var(--slate); padding-top: 1.5rem; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{% endblock %}
+{% block body %}
+{% set s = v.strip %}
+{% for p in problems %}<p class="problem" role="alert">{{ p }}</p>{% endfor %}
+
+<section aria-label="This month">
+  {% if v.orders %}
+    <h1>Rebalance orders are ready for the next open</h1>
+    <p>Sell {{ v.orders|selectattr('side','equalto','sell')|list|length }} and buy {{ v.orders|selectattr('side','equalto','buy')|list|length }} at the opening of the next trading session. The list is below.</p>
+  {% elif s.today == s.rebalance %}
+    <h1>Rebalance tonight</h1>
+    <p>After tonight's run the orders for tomorrow's open will appear here and on Telegram.</p>
+  {% else %}
+    <h1>{{ s.left }} trading day{{ '' if s.left == 1 else 's' }} to the {{ s.month }} rebalance</h1>
+    <p class="quiet">Nothing to do until {{ s.rebalance.strftime('%A %-d %B') }}. The agent updates every weekday evening.</p>
+  {% endif %}
+  <div class="strip" role="img" aria-label="Trading days in {{ s.month }}; today is {{ s.today.strftime('%-d %B') }}, rebalance on {{ s.rebalance.strftime('%-d %B') }}">
+    {% for d in s.days %}<span class="{{ 'past' if d < s.today }} {{ 'today' if d == s.today }} {{ 'rebalance' if d == s.rebalance }}"></span>{% endfor %}
+  </div>
+  <div class="strip-key"><span>{{ s.days[0].strftime('%-d %b') }}</span><span>Rebalance {{ s.rebalance.strftime('%-d %b') }}</span></div>
+</section>
+
+<section aria-label="Paper portfolio">
+  <h2>Paper portfolio</h2>
+  {% if not v.state or not v.state.start_date %}
+    <p>The ₹10 lakh paper portfolio starts at the first month-end: it buys the top 20 at the open after {{ s.rebalance.strftime('%-d %B') }}.</p>
+  {% endif %}
+  {% if v.equity is not none %}
+  <dl class="figures">
+    <div><dt>Value</dt><dd>{{ v.equity|inr }}</dd></div>
+    <div><dt>Since start</dt><dd class="{{ 'gain' if v.ret >= 0 else 'loss' }}">{{ v.ret|pct }}</dd></div>
+    <div><dt>Nifty 500 since start</dt><dd>{{ v.bench|pct }}</dd></div>
+  </dl>
+  {% if v.drawdown is not none and v.drawdown < 0 %}<p class="quiet" style="margin-top:.75rem">{{ (-v.drawdown)|pct(false) }} below its peak.{% if v.drawdown < -0.45 %} The rulebook says pause new buys and review beyond 45%.{% endif %}</p>{% endif %}
+  {% endif %}
+  {% if v.chart %}
+  <div class="chart"><canvas id="perf" aria-label="Return of the paper portfolio and the Nifty 500 since the start"></canvas></div>
+  {% endif %}
+</section>
+
+{% if v.orders %}
+<section aria-label="Orders for the next open">
+  <h2>Orders for the next open</h2>
+  <p class="action">Place these as market orders (or limit orders near the open) on the first trading morning. Sell first, then buy.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Action</th><th>Stock</th><th class="num">Amount</th></tr></thead>
+    <tbody>{% for o in v.orders %}
+      <tr><td>{{ 'Sell' if o.side == 'sell' else 'Buy' }}</td>
+          <td>{{ o.symbol }}<span class="sub">{{ o.reason|capitalize }}</span></td>
+          <td class="num">{{ 'All shares' if o.side == 'sell' else (o.target_value|inr) }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+
+{% if v.holdings %}
+<section aria-label="Holdings">
+  <h2>Holdings</h2>
+  <p class="quiet">A holding is sold at the month-end only if it falls outside the top 40.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Stock</th><th class="num">P&amp;L</th><th class="num">Rank</th></tr></thead>
+    <tbody>{% for h in v.holdings %}
+      <tr><td>{{ h.symbol }}<span class="sub">{{ h.value|inr }}, since {{ h.since|short }}</span></td>
+          <td class="num {{ 'gain' if h.pnl >= 0 else 'loss' }}">{{ h.pnl|pct }}</td>
+          <td class="num">{{ h.rank or '–' }}<span class="sub status {{ h.status }}">{{ {'keep': 'Keep', 'watch': 'Near the cut-off', 'sell': 'Would be sold'}[h.status] }}</span></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+
+<section aria-label="Strongest stocks now">
+  <h2>Strongest 20 right now</h2>
+  <p class="quiet">Ranked on {{ v.ranking_date or '–' }}. Only the month-end ranking is used for trades.</p>
+  {% if v.top %}
+  <div class="scroll"><table>
+    <thead><tr><th class="num" style="text-align:left;padding-left:0">Rank</th><th>Stock</th><th>Industry</th><th class="num">Score</th></tr></thead>
+    <tbody>{% for r in v.top %}
+      <tr><td>{{ r.rank }}</td><td>{{ r.symbol }}</td><td class="quiet">{{ r.industry|title if r.industry != 'UNCLASSIFIED' else '–' }}</td>
+          <td class="num">{{ '%.2f'|format(r.score|float) }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<p>No ranking yet. It appears after the first nightly run.</p>{% endif %}
+</section>
+
+{% if v.closed %}
+<section aria-label="Closed positions">
+  <h2>Closed positions</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Stock</th><th>Held</th><th class="num">Result</th></tr></thead>
+    <tbody>{% for c in v.closed %}
+      <tr><td>{{ c.symbol }}</td><td class="quiet">{{ c.entry_date|short }} to {{ c.exit_date|short }}</td>
+          <td class="num {{ 'gain' if c.net_pnl >= 0 else 'loss' }}">{{ (c.return_pct / 100)|pct }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+
+<footer>
+  <span>{% if run %}Last update {{ run.run_at[:16].replace('T', ' ') }} UTC ({{ run.status }}){% else %}No nightly run recorded yet{% endif %}</span>
+  <a href="{{ url_for('logout') }}">Sign out</a>
+</footer>
+
+{% if v.chart %}
+<script>
+(function () {
+  var css = getComputedStyle(document.documentElement);
+  var ink = css.getPropertyValue('--ink').trim(), slate = css.getPropertyValue('--slate').trim(),
+      line = css.getPropertyValue('--line').trim(), mark = css.getPropertyValue('--mark').trim();
+  var data = {{ v.chart|tojson }};
+  new Chart(document.getElementById('perf'), {
+    type: 'line',
+    data: { labels: data.labels, datasets: [
+      { label: 'Paper portfolio', data: data.strategy, borderColor: ink, borderWidth: 2.5, pointRadius: 0, tension: 0.15 },
+      { label: 'Nifty 500', data: data.nifty, borderColor: slate, borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, tension: 0.15 }
+    ]},
+    options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: slate, boxWidth: 18 } },
+                 tooltip: { callbacks: { label: function (c) { return c.dataset.label + ': ' + (c.parsed.y >= 0 ? '+' : '') + c.parsed.y.toFixed(1) + '%'; } } } },
+      scales: { x: { ticks: { color: slate, maxTicksLimit: 6 }, grid: { display: false } },
+                y: { ticks: { color: slate, callback: function (v) { return v + '%'; } }, grid: { color: line } } } }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

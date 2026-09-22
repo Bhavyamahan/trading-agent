@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{% block title %}Momentum agent{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #EEF1F6; --ink: #1B2340; --slate: #5B6480; --line: #CDD3E0;
+    --gain: #0F7B6C; --loss: #B4442F; --mark: #E0A526; --surface: #F7F9FC;
+    --step: 1.25rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #141A2E; --ink: #E6EAF4; --slate: #9AA3BD; --line: #2C3552;
+            --gain: #3FB8A4; --loss: #E07A63; --mark: #E8B64A; --surface: #1A2139; }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+         font: 400 1rem/1.55 "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+         font-variant-numeric: tabular-nums;
+         padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0); }
+  main { max-width: 44rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  h1 { font-size: clamp(1.75rem, 5vw, 2.4rem); line-height: 1.15; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 .5rem; }
+  h2 { font-size: 1.15rem; font-weight: 600; margin: 0 0 .75rem; }
+  p { margin: 0 0 .75rem; max-width: 36rem; }
+  .quiet { color: var(--slate); }
+  .gain { color: var(--gain); } .loss { color: var(--loss); }
+  section { padding: 2rem 0; border-top: 1px solid var(--line); }
+  section:first-of-type { border-top: 0; padding-top: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+  th { text-align: left; font-weight: 500; color: var(--slate); padding: .4rem .5rem .4rem 0; border-bottom: 1px solid var(--line); }
+  td { padding: .55rem .5rem .55rem 0; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+  th.num, td.num { text-align: right; padding-left: .5rem; }
+  th:last-child, td:last-child { padding-right: 0; }
+  td.num + td, th.num + th { padding-left: 1rem; }
+  .sub { display: block; font-size: .8rem; color: var(--slate); margin-top: .1rem; }
+  .scroll { overflow-x: auto; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+  button, input { font: inherit; }
+</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+<main>{% block body %}{% endblock %}</main>
+</body>
+</html>

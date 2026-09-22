@@ -60,3 +60,10 @@ runs one evening of the paper portfolio and publishes the report on the run's su
 (also `live/latest_report.md`; the full state is `live/paper_state.json`). Month-end evenings list
 the orders for the next open. Optional Telegram alert: add secrets `TELEGRAM_BOT_TOKEN` and
 `TELEGRAM_CHAT_ID`.
+
+## Dashboard (Render)
+
+`dashboard/` is a small password-protected Flask site that shows the paper portfolio, the
+month's rebalance countdown, pending orders, holdings with their current rank and the top 20.
+Deploy with Render: New > Blueprint > this repo (uses `render.yaml`), then fill in
+`SUPABASE_URL`, `SUPABASE_SERVICE_KEY` and `DASHBOARD_PASSWORD`.
